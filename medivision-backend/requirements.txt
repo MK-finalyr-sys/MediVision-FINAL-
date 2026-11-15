@@ -1,0 +1,25 @@
+# Core (required)
+fastapi>=0.115
+uvicorn[standard]>=0.32
+httpx>=0.27
+scikit-learn>=1.5
+sklearn-crfsuite>=0.5
+joblib>=1.4
+
+# Integration: pill classifier (EfficientNet ONNX) — REQUIRED for Feature 1 vision path
+onnxruntime>=1.17
+numpy>=1.26
+Pillow>=10.0
+
+# Integration: DDInter SQLite (drug-drug interactions) — REQUIRED for Feature 2 upgrade
+# (the DB itself is built by `python -m integrations.setup_integrations build-ddinter`)
+aiosqlite>=0.20
+
+# Integration: Indic STT (AI4Bharat conformer) — OPTIONAL, heavy (~600 MB model + torch)
+# Install only if you want server-side Tamil/Hindi voice input:
+#   pip install transformers torch torchaudio
+# Then run: python -m integrations.setup_integrations download-indic-stt
+
+# Integration: Meditron chat (offline LLM via Ollama) — OPTIONAL
+# Install Ollama from https://ollama.com/download, then `ollama pull meditron:7b`
+# No Python deps required here — we call Ollama over HTTP.
