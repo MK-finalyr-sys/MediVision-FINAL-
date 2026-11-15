@@ -357,3 +357,56 @@ def gemini_compose(salt: str, mapping_basis: str, evidence: dict):
     except Exception:
         return None
     return None
+
+
+def corroborate_product(brand, salt, strength, form):
+    """Require a fetched structured product record supporting every identity field.
+
+    Exact comparisons deliberately leave synonyms and incomplete records unverified.
+    NDC listing corroboration does not imply FDA approval or suitability for a patient.
+    """
+    from datetime import datetime, timezone
+
+    if not all((brand, salt, strength, form)):
+        return []
+    url = (
+        "https://api.fda.gov/drug/ndc.json?search="
+        + quote('brand_name.exact:"' + brand + '"', safe="")
+        + "&limit=10"
+    )
+    data = _get_json(url)
+    if not isinstance(data, dict):
+        return []
+
+    def normalized(value):
+        return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+    expected = {
+        "brand": brand, "salt": salt, "strength": strength, "form": form,
+    }
+    records = data.get("results")
+    if not isinstance(records, list):
+        return []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        ingredients = record.get("active_ingredients") or []
+        if not isinstance(ingredients, list) or len(ingredients) != 1 or not isinstance(ingredients[0], dict) or not record.get("product_ndc"):
+            continue
+        actual = {
+            "brand": record.get("brand_name"),
+            "salt": ingredients[0].get("name"),
+            "strength": re.sub(r"\s*/\s*1\s*$", "", str(ingredients[0].get("strength") or "")),
+            "form": record.get("dosage_form"),
+        }
+        if any(normalized(actual[k]) != normalized(v) for k, v in expected.items()):
+            continue
+        return [{
+            "url": url,
+            "sourceType": "government",
+            "recordId": record["product_ndc"],
+            "retrievedAt": datetime.now(timezone.utc).isoformat(),
+            "supportedFields": actual,
+            "validation": "exact-product-fields",
+        }]
+    return []

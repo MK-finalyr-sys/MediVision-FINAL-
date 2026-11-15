@@ -3,25 +3,35 @@
 // /api/ai/* and converts results into THIS app's Medicine contract so every
 // AI match renders through the existing cards and storage untouched.
 import { z } from "zod";
-import { medicineSchema, type Medicine } from "./contracts";
+import { medicineSchema, identificationSchema, type Medicine } from "./contracts";
 import { normalizeIngredients } from "./engine";
 import { medicines, findCatalogSaltMatchHelper } from "./catalog";
 
 // ---------- backend response (lenient — backend may be offline) ----------
+const languageCardSchema = z.object({
+  uses: z.string().optional(), beforeYouTake: z.array(z.string()).optional(),
+  sideEffects: z.string().optional(), stopAndGetHelp: z.array(z.string()).optional(),
+  preChecklist: z.array(z.string()).optional(),
+});
+const cardSchema = z.object({
+  en: languageCardSchema.optional(), ta: languageCardSchema.optional(), hi: languageCardSchema.optional(),
+  model: z.string().optional(), caveats: z.array(z.string()).optional(),
+});
 export const aiBackendResultSchema = z.object({
   available: z.boolean().optional(),
-  found: z.boolean().default(false),
+  found: z.boolean(),
   query: z.string().optional(),
   salt: z.string().nullable().optional(),
   brand: z.string().nullable().optional(),
   usName: z.string().nullable().optional(),
-  strength: z.string().optional(),
-  form: z.string().optional(),
+  strength: z.string().nullable().optional(),
+  form: z.string().nullable().optional(),
   rxnormId: z.string().nullable().optional(),
-  brandExamples: z.string().optional(),
-  manufacturer: z.string().optional(),
+  brandExamples: z.string().nullable().optional(),
+  manufacturer: z.string().nullable().optional(),
   mappingBasis: z.string().optional(),
   canonicalBrand: z.string().nullable().optional(),
+  canonicalSalt: z.string().nullable().optional(),
   nerModel: z.string().optional(),
   engine: z.string().optional(),
   entities: z.array(z.object({ label: z.string(), text: z.string(), start: z.number().optional(), end: z.number().optional() })).optional(),
@@ -29,25 +39,104 @@ export const aiBackendResultSchema = z.object({
   genericPricing: z.record(z.string(), z.unknown()).nullable().optional(),
   webEvidence: z.array(z.object({ title: z.string().optional(), url: z.string(), snippet: z.string().optional(), host: z.string().optional() })).optional(),
   sources: z.array(z.object({ title: z.string().optional(), url: z.string(), sourceType: z.string().optional() })).optional(),
-  card: z.record(z.string(), z.record(z.string(), z.unknown())).nullable().optional(),
-  verificationStatus: z.string().optional(),
+  card: cardSchema.nullable().optional(),
+  ...identificationSchema.shape,
+  verificationStatus: identificationSchema.shape.verificationStatus.default("candidate-needs-confirmation"),
+  metadataWarnings: z.array(z.string()).optional(),
   note: z.string().optional(),
   uncertainties: z.array(z.string()).optional(),
 });
 export type AIBackendResult = z.infer<typeof aiBackendResultSchema>;
 
 // ---------- client: /identify ----------
-export async function aiIdentify(ocrText: string, timeoutMs = 15000): Promise<AIBackendResult | null> {
+export class IdentificationError extends Error {
+  constructor(public code: "timeout" | "unavailable" | "api" | "parse", message: string, public details: string[] = []) {
+    super(message);
+    this.name = "IdentificationError";
+  }
+}
+
+async function identificationResponseError(response: Response): Promise<IdentificationError> {
+  const envelope = z.object({ error: z.object({ code: z.enum(["timeout", "unavailable", "api", "parse"]) }) });
+  const parsed = envelope.safeParse(await response.json().catch(() => null));
+  const code = parsed.success ? parsed.data.error.code : response.status === 504 ? "timeout" : response.status === 503 ? "unavailable" : "api";
+  const messages = {
+    timeout: "Medicine identification timed out. Please retry.",
+    unavailable: "The identification backend is unavailable. Please retry.",
+    api: "The identification service returned an error. Please retry.",
+    parse: "The identification service returned unreadable data. Please retry.",
+  };
+  return new IdentificationError(code, messages[code]);
+}
+
+export function parseIdentification(data: unknown): AIBackendResult {
+  const raw = z.record(z.string(), z.unknown()).safeParse(data);
+  if (!raw.success) throw new IdentificationError("parse", "The identification response is not an object.");
+  const sanitized = { ...raw.data };
+  const metadataWarnings: string[] = [];
+  // Invalid optional presentation data must not discard a valid identity.
+  // Verification fields remain strict and are never removed by this recovery.
+  const metadataFields = ["card", "label", "genericPricing", "entities", "sources", "webEvidence",
+    "manufacturer", "brandExamples", "nerModel", "engine", "uncertainties"] as const;
+  for (const field of metadataFields) {
+    if (!aiBackendResultSchema.shape[field].safeParse(sanitized[field]).success) {
+      delete sanitized[field];
+      metadataWarnings.push(`Optional ${field} information could not be read. Review the package identity below.`);
+    }
+  }
+  const parsed = aiBackendResultSchema.safeParse(sanitized);
+  if (!parsed.success) {
+    throw new IdentificationError("parse", "The identification response could not be read. Please retry.",
+      parsed.error.issues.map(issue => issue.path.join(".")));
+  }
+  if (parsed.data.found && !parsed.data.salt?.trim()) {
+    throw new IdentificationError("parse", "The identification response is missing its active ingredient.");
+  }
+  parsed.data.metadataWarnings = metadataWarnings;
+  return parsed.data;
+}
+
+export async function aiIdentify(ocrText: string, timeoutMs = 125000): Promise<AIBackendResult | null> {
   const text = ocrText.trim();
   if (!text) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch("/api/ai/identify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ocrText: text }), signal: controller.signal });
-    if (!res.ok) return null;
-    const parsed = aiBackendResultSchema.safeParse(await res.json());
-    return parsed.success ? parsed.data : null;
-  } catch { return null; } finally { clearTimeout(timer); }
+    if (!res.ok) throw await identificationResponseError(res);
+    let data: unknown;
+    try { data = await res.json(); }
+    catch { throw new IdentificationError("parse", "The identification service returned unreadable data."); }
+    const result = parseIdentification(data);
+    if (result.available === false) throw new IdentificationError("unavailable", "The identification backend is unavailable. Please retry.");
+    return result;
+  } catch (error) {
+    if (error instanceof IdentificationError) throw error;
+    throw new IdentificationError(controller.signal.aborted ? "timeout" : "unavailable",
+      controller.signal.aborted ? "Medicine identification timed out. Please retry." : "Could not reach the identification service. Check your connection and retry.");
+  } finally { clearTimeout(timer); }
+}
+
+export function candidateAgreesWithIdentification(result: AIBackendResult, candidate: Candidate): boolean {
+  const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+  const salts = [result.salt, result.canonicalSalt, result.usName].filter((value): value is string => !!value);
+  if (!salts.some(salt => normalize(salt) === normalize(candidate.salt))) return false;
+  if (candidate.strengthDetected && result.strength) {
+    const rankedStrength = candidate.strengthDetected.toLowerCase().replace(/\s/g, "");
+    const identifiedStrength = result.strength.toLowerCase().replace(/\s/g, "");
+    const comparable = /^\d+(?:\.\d+)?$/.test(rankedStrength)
+      ? identifiedStrength.match(/^\d+(?:\.\d+)?/)?.[0]
+      : identifiedStrength;
+    if (rankedStrength !== comparable) return false;
+  }
+  return true;
+}
+
+export function canAutoOpenIdentification(result: AIBackendResult, ranked: CandidatesResult | null): boolean {
+  if (!result.found || result.requiresManualReview || result.conflicts.length || result.verificationStatus === "conflicting-identification") return false;
+  const first = ranked?.candidates[0];
+  if (first && !candidateAgreesWithIdentification(result, first)) return false;
+  return result.verificationStatus === "verified-online" || result.mappingBasis === "indian-brand-index" || (!!first && first.probability >= 0.75);
 }
 
 // ---------- backend -> THIS app's Medicine ----------
@@ -85,10 +174,10 @@ function contentBlock(result: AIBackendResult, lang: "en" | "ta" | "hi", en: { u
   const arr = (v: unknown, fb: string[]) => Array.isArray(v) ? v.filter((s): s is string => typeof s === "string" && s.trim().length > 3) : fb;
   return {
     uses: card.uses.trim(),
-    beforeYouTake: arr(card.beforeYouTake, en.beforeYouTake).slice(0, 5),
+    beforeYouTake: bulletize(arr(card.beforeYouTake, en.beforeYouTake).join("; "), 3, 5, en.beforeYouTake),
     sideEffects: typeof card.sideEffects === "string" && card.sideEffects.trim().length >= 5 ? card.sideEffects.trim() : en.sideEffects,
-    stopAndGetHelp: arr(card.stopAndGetHelp, en.stopAndGetHelp).slice(0, 4),
-    preChecklist: arr(card.preChecklist, en.preChecklist).slice(0, 4),
+    stopAndGetHelp: bulletize(arr(card.stopAndGetHelp, en.stopAndGetHelp).join("; "), 2, 4, en.stopAndGetHelp),
+    preChecklist: bulletize(arr(card.preChecklist, en.preChecklist).join("; "), 2, 4, en.preChecklist),
   };
 }
 
@@ -113,7 +202,7 @@ export function backendToMedicine(result: AIBackendResult): Medicine | null {
     .slice(0, 4)
     .map(s => ({ title: (s.title || "Reference").slice(0, 110), url: s.url, sourceType: sourceTypeFor(s.url) }));
   const candidate: Medicine = {
-    id: `ai-${(brand || salt).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
+    id: `ai-${([brand || salt, salt, strengthEntity, formEntity].join("-")).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
     name: brand || result.canonicalBrand || salt,
     aliases: [result.brandExamples, result.manufacturer, result.usName].filter((v): v is string => !!v),
     activeIngredient: salt,
@@ -123,6 +212,8 @@ export function backendToMedicine(result: AIBackendResult): Medicine | null {
     category: result.mappingBasis || "AI identified",
     tags: ["all"],
     verified: false,
+    identification: identificationSchema.parse(result),
+    identityConfirmed: false,
     sources,
     en: contentBlock(result, "en", en),
     ta: contentBlock(result, "ta", en),
@@ -224,7 +315,7 @@ export const candidateSchema = z.object({
   usName: z.string().optional(),
   probability: z.number(),
   basis: z.string(),
-  matchedToken: z.string().optional(),
+  matchedToken: z.string().nullable().optional(),
   matchedBrand: z.string().nullable().optional(),
   brandScore: z.number().optional(),
   saltScore: z.number().optional(),
@@ -263,7 +354,7 @@ export async function aiCandidates(
   ocrText: string,
   imageB64?: string,
   topK = 5,
-  timeoutMs = 15000,
+  timeoutMs = 125000,
 ): Promise<CandidatesResult | null> {
   const text = ocrText.trim();
   if (!text) return null;
@@ -276,10 +367,18 @@ export async function aiCandidates(
       body: JSON.stringify({ ocrText: text, imageB64, topK }),
       signal: controller.signal,
     });
-    if (!res.ok) return null;
-    const parsed = candidatesResultSchema.safeParse(await res.json());
-    return parsed.success ? parsed.data : null;
-  } catch { return null; } finally { clearTimeout(timer); }
+    if (!res.ok) throw await identificationResponseError(res);
+    let data: unknown;
+    try { data = await res.json(); }
+    catch { throw new IdentificationError("parse", "Ranked candidates returned unreadable data."); }
+    const parsed = candidatesResultSchema.safeParse(data);
+    if (!parsed.success) throw new IdentificationError("parse", "Ranked candidates could not be read.");
+    if (parsed.data.available === false) throw new IdentificationError("unavailable", "Ranked candidates are unavailable.");
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof IdentificationError) throw error;
+    throw new IdentificationError(controller.signal.aborted ? "timeout" : "unavailable", "Ranked candidate retrieval failed. Retry to see candidates.");
+  } finally { clearTimeout(timer); }
 }
 
 // ===========================================================================

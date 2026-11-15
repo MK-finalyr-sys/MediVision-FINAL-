@@ -34,7 +34,7 @@ def test_a_damaged_atrip10():
     assert res.get("strength") == "10 mg", f"Expected 10 mg, got {res.get('strength')}"
     assert res.get("form") == "Tablet", f"Expected Tablet, got {res.get('form')}"
     assert res.get("manufacturer") == "Marc Cure", f"Expected Marc Cure, got {res.get('manufacturer')}"
-    assert res.get("verificationStatus") == "verified-online", f"Expected verified-online, got {res.get('verificationStatus')}"
+    assert res.get("verificationStatus") == "candidate-needs-confirmation", f"Expected candidate-needs-confirmation, got {res.get('verificationStatus')}"
 
 
 def test_b_hydrochloride_tablets():

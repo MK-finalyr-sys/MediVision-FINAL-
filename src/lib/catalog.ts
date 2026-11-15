@@ -24,8 +24,8 @@ function loadAI(): Medicine[] {
 
 function saveAI(list: Medicine[]) {
   aiSchema.parse(list);
-  _aiCache = list;
   persist(keys.aiMeds, aiSchema, list);
+  _aiCache = list;
 }
 
 /** Register an AI-identified medicine (dedup by id). Returns the merged list. */
@@ -35,6 +35,8 @@ export function registerAIMedicines(items: Medicine[]): Medicine[] {
   const seen = new Set(existing.map(m => m.id));
   const merged = [...existing];
   for (const m of items) {
+    const index = merged.findIndex(existing => existing.id === m.id);
+    if (index >= 0) merged[index] = m;
     if (!seen.has(m.id)) {
       merged.push(m);
       seen.add(m.id);

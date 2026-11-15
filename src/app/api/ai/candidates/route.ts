@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 const BACKEND_URL = (process.env.BACKEND_URL ?? "http://localhost:8000").replace(/\/+$/, "");
-const PROXY_TIMEOUT_MS = 20000;
+const PROXY_TIMEOUT_MS = 120000;
 
 const bodySchema = z.object({
   ocrText: z.string().optional(),
@@ -26,10 +26,20 @@ export async function POST(request: Request) {
       body: JSON.stringify({ ocrText, imageB64: body.imageB64, topK: body.topK ?? 5 }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`backend responded ${res.status}`);
-    const data = await res.json();
+    if (!res.ok) {
+      return Response.json({ available: false, found: false, error: { code: "api" } }, { status: 502 });
+    }
+    let data: unknown;
+    try { data = await res.json(); }
+    catch {
+      return Response.json({ available: false, found: false, error: { code: "parse" } }, { status: 502 });
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      return Response.json({ available: false, found: false, error: { code: "parse" } }, { status: 502 });
+    }
     return Response.json({ ...data, available: true, engine: "backend-ner" });
   } catch {
-    return Response.json({ available: false, found: false, engine: "builtin-fallback" });
+    const timeout = controller.signal.aborted;
+    return Response.json({ available: false, found: false, error: { code: timeout ? "timeout" : "unavailable" } }, { status: timeout ? 504 : 503 });
   } finally { clearTimeout(timer); }
 }

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Worker } from "tesseract.js";
 import {
   Camera,
+  LoaderCircle,
   Upload,
   Search,
   ScanLine,
@@ -13,7 +14,6 @@ import {
   Focus,
   Video,
   X,
-  LoaderCircle,
   AlertCircle,
   RotateCcw,
   ShieldCheck,
@@ -24,25 +24,25 @@ import {
   ExternalLink,
   Layers,
   Sparkles,
-  Info,
 } from "lucide-react";
-import { medicines, registerAIMedicines, findCatalogSaltMatchHelper } from "@/lib/catalog";
+import { medicines } from "@/lib/catalog";
 import type { Medicine } from "@/lib/contracts";
-import { confidenceTier, matchMedicines, searchMedicines, type Match } from "@/lib/engine";
+import { matchMedicines, searchMedicines } from "@/lib/engine";
 import { preprocessImage, isBlurry } from "@/lib/image";
 import {
   aiCandidates,
   aiIdentify,
   backendToMedicine,
-  candidateToMedicine,
   type Candidate,
   type CandidatesResult,
   type AIBackendResult,
-  type VisionEvidence,
+  canAutoOpenIdentification,
+  candidateAgreesWithIdentification,
+  IdentificationError,
 } from "@/lib/ai-backend";
 import { PrivacyLine } from "./ui";
 
-type Stage = "idle" | "Captured" | "Enhancing" | "Reading text" | "Matching" | "Complete";
+type Stage = "idle" | "Captured" | "Enhancing" | "Reading text" | "Matching" | "Complete" | "Error";
 const stages: Stage[] = ["Captured", "Enhancing", "Reading text", "Matching"];
 
 interface ScanViewProps {
@@ -66,10 +66,10 @@ export function ScanView({
   const [progress, setProgress] = useState(0);
   const [ocrStatus, setOcrStatus] = useState("");
   const [error, setError] = useState("");
-  const [uncertain, setUncertain] = useState(false);
   const [previews, setPreviews] = useState<{ before: string; after: string; variance: number } | null>(null);
   const [text, setText] = useState("");
-  const [candidate, setCandidate] = useState<Match | null>(null);
+  const [rawOcrText, setRawOcrText] = useState("");
+  const [inputSource, setInputSource] = useState<"image" | "text">("image");
   const [live, setLive] = useState(false);
 
   // AI Pipeline State
@@ -77,7 +77,6 @@ export function ScanView({
   const [aiResult, setAiResult] = useState<AIBackendResult | null>(null);
   const [aiMedicine, setAiMedicine] = useState<Medicine | null>(null);
   const [candidatesData, setCandidatesData] = useState<CandidatesResult | null>(null);
-  const [savedSuccess, setSavedSuccess] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -87,9 +86,9 @@ export function ScanView({
   const workerRef = useRef<Worker | null>(null);
   const lastHash = useRef("");
   const run = useRef(0);
-  const [aiImageB64, setAiImageB64] = useState<string | undefined>(undefined);
 
-  const busy = stage !== "idle" && stage !== "Complete";
+
+  const busy = stage !== "idle" && stage !== "Complete" && stage !== "Error";
 
   useEffect(() => {
     if (focusSearch) searchRef.current?.focus();
@@ -139,90 +138,65 @@ export function ScanView({
     }
   }
 
-  async function triggerAIPipeline(ocrText: string, imageB64?: string, autoOpen = true) {
-    if (!ocrText.trim()) return;
+  async function triggerAIPipeline(ocrText: string, imageB64?: string, fromImage = false) {
+    const current = ++run.current;
     setAiLoading(true);
-
+    setInputSource(fromImage ? "image" : "text");
+    setStage("Matching");
+    setError("");
+    stopCamera();
+    setAiResult(null);
+    setAiMedicine(null);
+    setCandidatesData(null);
     try {
-      // Parallel fetch to /identify and /candidates
-      const [idRes, candRes] = await Promise.all([
-        aiIdentify(ocrText),
-        aiCandidates(ocrText, imageB64, 5),
+      if (!ocrText.trim()) throw new IdentificationError("parse", "No package text was read. Retake the photo or enter the printed text.");
+      const [identityResponse, candidateResponse] = await Promise.allSettled([
+        aiIdentify(ocrText), aiCandidates(ocrText, imageB64, 5),
       ]);
-
+      if (current !== run.current) return;
+      if (identityResponse.status === "rejected") throw identityResponse.reason;
+      const idRes = identityResponse.value;
+      const candRes = candidateResponse.status === "fulfilled" ? candidateResponse.value : null;
+      if (candidateResponse.status === "rejected") setError(candidateResponse.reason instanceof IdentificationError ? `[${candidateResponse.reason.code}] ${candidateResponse.reason.message}` : "Ranked candidates are unavailable. Review the proposed identity or retry.");
       setCandidatesData(candRes);
-
-      let finalMed: Medicine | null = null;
-      let matchScore = 0.85;
-
-      if (idRes && idRes.found) {
-        setAiResult(idRes);
+      setAiResult(idRes);
+      if (idRes?.found) {
         const mapped = backendToMedicine(idRes);
-        if (mapped) {
-          finalMed = mapped;
-          setAiMedicine(mapped);
-          registerAIMedicines([mapped]);
-        }
-      } else if (candRes && candRes.found && candRes.candidates.length > 0) {
-        const topCand = candRes.candidates[0];
-        const catalogMatch = medicines.find(
-          (m) => m.activeIngredient.toLowerCase() === topCand.salt.toLowerCase()
-        );
-        finalMed = catalogMatch || candidateToMedicine(topCand);
-        setAiMedicine(finalMed);
-        registerAIMedicines([finalMed]);
-        matchScore = topCand.probability;
+        if (!mapped) throw new IdentificationError("parse", "The proposed medicine could not be displayed. Please retry.");
+        setAiMedicine(mapped);
+        if (canAutoOpenIdentification(idRes, candRes)) onOpen(mapped, candRes?.candidates[0]?.probability);
       }
-
-      if (candRes && !candRes.found && candRes.note === "NO_MATCH") {
-        setUncertain(true);
-      }
-
-      // Check for strong match vs ambiguous match
-      const topCandProb = candRes?.candidates?.[0]?.probability ?? 0;
-      const isStrongMatch =
-        (idRes?.verificationStatus === "verified-online" || topCandProb >= 0.7) &&
-        (candRes?.candidates?.length === 1 || topCandProb >= 0.75);
-
-      if (finalMed && autoOpen && isStrongMatch) {
-        // Automatically open the medicine popup in confirmation mode for strong matches
-        onOpen(finalMed, topCandProb || matchScore);
-      }
-    } catch (e) {
-      console.warn("AI pipeline error:", e);
+      setStage("Complete");
+    } catch (error) {
+      if (current !== run.current) return;
+      setError(error instanceof IdentificationError ? `[${error.code}] ${error.message}` : "Identification failed. Please retry.");
+      setStage("Error");
     } finally {
-      setAiLoading(false);
+      if (current === run.current) setAiLoading(false);
     }
   }
 
   async function processFile(file: Blob) {
     const current = ++run.current;
     setError("");
-    setUncertain(false);
-    setCandidate(null);
     setText("");
+    setRawOcrText("");
+    setInputSource("image");
     setPreviews(null);
     setProgress(0);
     setStage("Captured");
     setAiResult(null);
     setAiMedicine(null);
     setCandidatesData(null);
-    setSavedSuccess(false);
     stopCamera();
 
     try {
-      // Convert image to base64 for vision classifier
-      let b64Str: string | undefined = undefined;
-      try {
+      const b64Str = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => {
-          if (typeof reader.result === "string") {
-            b64Str = reader.result;
-            setAiImageB64(reader.result);
-          }
-        };
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("The photo could not be read."));
         reader.readAsDataURL(file);
-      } catch { }
+      });
 
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       setStage("Enhancing");
@@ -275,38 +249,21 @@ export function ScanView({
       if (current !== run.current) return;
       const recognizedText = data.text;
       setText(recognizedText);
+      setRawOcrText(recognizedText);
       setStage("Matching");
 
       if (/\b(product image|coming soon|no image available|placeholder)\b/i.test(recognizedText)) {
         throw new Error("This looks like a placeholder image. Please take a new photo of your medicine strip.");
       }
 
-      // 1. Run local catalog matcher
-      const result = matchMedicines(recognizedText, medicines, data.confidence);
-      if (result.multiple) {
-        setError("More than one medicine may be visible. Please photograph one strip at a time.");
-        setStage("Complete");
-        return;
+      if (matchMedicines(recognizedText, medicines, data.confidence).multiple) {
+        throw new Error("More than one medicine may be visible. Please photograph one strip at a time.");
       }
-
-      const top = result.matches[0];
-      if (top && confidenceTier(top.score) === "HIGH") {
-        setCandidate(top);
-        setAiMedicine(top.medicine);
-      } else if (top && confidenceTier(top.score) === "MEDIUM") {
-        setCandidate(top);
-      } else {
-        setUncertain(true);
-      }
-
-      setStage("Complete");
-
-      // 2. Trigger AI identification & candidate ranking pipeline
-      void triggerAIPipeline(recognizedText, b64Str);
+      await triggerAIPipeline(recognizedText, b64Str, true);
     } catch (e) {
       if (current !== run.current) return;
       setError(e instanceof Error ? e.message : "The scan could not finish. Retake the photo or use manual search.");
-      setStage("Complete");
+      setStage("Error");
       if (workerRef.current) {
         await workerRef.current.terminate().catch(() => undefined);
         workerRef.current = null;
@@ -340,37 +297,26 @@ export function ScanView({
   }
 
   function handleSelectCandidate(cand: Candidate) {
-    const matched = medicines.find(
-      (m) => m.activeIngredient.toLowerCase() === cand.salt.toLowerCase()
-    );
-    if (matched) {
-      setAiMedicine(matched);
-      onOpen(matched, cand.probability);
-    } else {
-      const syntheticMed = candidateToMedicine(cand);
-      registerAIMedicines([syntheticMed]);
-      setAiMedicine(syntheticMed);
-      onOpen(syntheticMed, cand.probability);
-      void aiIdentify(cand.salt).then((res) => {
-        if (res && res.found) {
-          const fullMed = backendToMedicine(res);
-          if (fullMed) {
-            registerAIMedicines([fullMed]);
-            setAiMedicine(fullMed);
-          }
-        }
-      });
+    if (aiResult?.requiresManualReview || aiResult?.conflicts.length || aiResult?.verificationStatus === "conflicting-identification") {
+      if (aiMedicine) onOpen(aiMedicine);
+      return;
     }
+    if (aiMedicine && aiResult && candidateAgreesWithIdentification(aiResult, cand)) {
+      onOpen(aiMedicine, cand.probability);
+      return;
+    }
+    // Retrieve the selected candidate before displaying any proposed formulation.
+    const candidateQuery = [cand.matchedBrand || cand.salt,
+      aiResult?.observedIdentity?.strength, aiResult?.observedIdentity?.form].filter(Boolean).join(" ");
+    void triggerAIPipeline(candidateQuery);
   }
 
   function handleSaveCurrent() {
-    if (aiMedicine && onSave) {
-      onSave(aiMedicine);
-      setSavedSuccess(true);
-    }
+    if (aiMedicine) onOpen(aiMedicine);
   }
 
   const results = searchMedicines(query, medicines);
+  const visibleStages = inputSource === "image" ? stages : ["Matching"] as Stage[];
 
   return (
     <div className="page-enter">
@@ -507,18 +453,18 @@ export function ScanView({
           {stage !== "idle" && (
             <div className="pipeline" aria-live="polite">
               <div className="pipeline-stages">
-                {stages.map((s, i) => (
+                {visibleStages.map((s, i) => (
                   <span
                     key={s}
                     className={
-                      stage === "Complete" || stages.indexOf(stage) > i
+                      stage === "Complete" || visibleStages.indexOf(stage) > i
                         ? "done"
                         : stage === s
                           ? "current"
                           : ""
                     }
                   >
-                    {stage === "Complete" || stages.indexOf(stage) > i ? (
+                    {stage === "Complete" || visibleStages.indexOf(stage) > i ? (
                       <Check size={14} />
                     ) : (
                       <i>{i + 1}</i>
@@ -554,21 +500,38 @@ export function ScanView({
             </div>
           )}
 
+          {stage === "Matching" && <p role="status">Identifying medicine online?</p>}
+          <details>
+            <summary>Enter or correct package text</summary>
+            <label htmlFor="package-text">Text read from the medicine package</label>
+            <textarea id="package-text" value={text} disabled={busy} onChange={event => setText(event.target.value)} />
+            <button type="button" className="button secondary" disabled={busy || !text.trim()} onClick={() => void triggerAIPipeline(text)}>
+              Identify package text
+            </button>
+          </details>
+          {aiResult?.metadataWarnings?.map(message => <p role="status" key={message}>{message}</p>)}
+          {(aiResult?.requiresManualReview || !!aiResult?.conflicts.length || aiResult?.verificationStatus === "conflicting-identification") && (
+            <div className="notice error" role="alert">
+              <div><strong>Manual review required</strong>
+                {aiResult.conflicts.map(conflict => <p key={conflict.field}>{conflict.field}: package says {conflict.observed}; catalog proposes {conflict.proposed}.</p>)}
+                <p>Ask a pharmacist to review the package, then correct the text and rescan.</p>
+              </div>
+            </div>
+          )}
+
           {/* AI IDENTIFIED RESULT CARD */}
-          {(aiMedicine || aiResult || candidate) && stage === "Complete" && (
+          {aiMedicine && stage === "Complete" && (
             <div className="panel scan-ai-identified-card">
               <div className="ai-identified-header">
                 <div>
                   <span className="eyebrow-chip">
-                    <Sparkles size={13} /> AI IDENTIFIED MEDICINE
+                    <Sparkles size={13} /> PROPOSED MEDICINE
                   </span>
-                  <h2>{aiMedicine?.name || aiResult?.canonicalBrand || candidate?.medicine.name}</h2>
+                  <h2>{aiMedicine.name}</h2>
                   <p className="ai-active-salt">
                     Active Ingredient:{" "}
                     <strong>
-                      {aiMedicine?.activeIngredient ||
-                        aiResult?.salt ||
-                        candidate?.medicine.activeIngredient}
+                      {aiMedicine.activeIngredient}
                     </strong>
                   </p>
                 </div>
@@ -587,7 +550,7 @@ export function ScanView({
                     </span>
                   )}
                   {aiResult?.rxnormId && (
-                    <span className="rxnorm-chip" title="RxNorm verified">
+                    <span className="rxnorm-chip" title="Ingredient reference in RxNorm">
                       RxNorm: {aiResult.rxnormId}
                     </span>
                   )}
@@ -649,61 +612,31 @@ export function ScanView({
                   <button
                     type="button"
                     className="button primary"
-                    onClick={() => onOpen(aiMedicine, candidate?.score || 0.9)}
+                    onClick={() => onOpen(aiMedicine)}
                   >
                     View Medicine Details &amp; Confirm <ArrowRight size={16} />
                   </button>
                 )}
 
-                {onCheckSafety && (aiMedicine || aiResult?.salt) && (
-                  <button
-                    type="button"
-                    className="button secondary"
-                    onClick={() =>
-                      onCheckSafety(
-                        aiMedicine ||
-                        medicines.find(
-                          (m) =>
-                            m.activeIngredient.toLowerCase() ===
-                            (aiResult?.salt || "").toLowerCase()
-                        ) ||
-                        medicines[0]
-                      )
-                    }
-                  >
-                    <ShieldAlert size={16} /> Check Safety
+                {onCheckSafety && aiMedicine && (
+                  <button type="button" className="button secondary" onClick={() => onOpen(aiMedicine)}>
+                    <ShieldAlert size={16} /> Confirm before checking safety
                   </button>
                 )}
-
-                {onCheckPricing && (aiMedicine || aiResult?.salt) && (
-                  <button
-                    type="button"
-                    className="button secondary"
-                    onClick={() =>
-                      onCheckPricing(
-                        aiMedicine ||
-                        medicines.find(
-                          (m) =>
-                            m.activeIngredient.toLowerCase() ===
-                            (aiResult?.salt || "").toLowerCase()
-                        ) ||
-                        medicines[0]
-                      )
-                    }
-                  >
-                    <Coins size={16} /> Compare Generic Price
+                {onCheckPricing && aiMedicine && (
+                  <button type="button" className="button secondary" onClick={() => onOpen(aiMedicine)}>
+                    <Coins size={16} /> Confirm before comparing prices
                   </button>
                 )}
 
                 {onSave && aiMedicine && (
                   <button
                     type="button"
-                    className={`button ${savedSuccess ? "taken-button" : "secondary"}`}
+                    className="button secondary"
                     onClick={handleSaveCurrent}
-                    disabled={savedSuccess}
                   >
                     <BookmarkPlus size={16} />
-                    {savedSuccess ? "Saved to Cabinet" : "Save to Cabinet"}
+                    Confirm before saving
                   </button>
                 )}
               </div>
@@ -711,7 +644,7 @@ export function ScanView({
               {/* Verified Sources */}
               {aiResult?.sources && aiResult.sources.length > 0 && (
                 <div className="scan-sources-row">
-                  <span>Authoritative Sources:</span>
+                  <span>Reference links:</span>
                   {aiResult.sources.slice(0, 3).map((s, idx) => (
                     <a
                       key={idx}
@@ -729,7 +662,7 @@ export function ScanView({
           )}
 
           {/* CANDIDATES LIST FOR DAMAGED STRIPS */}
-          {candidatesData?.candidates && candidatesData.candidates.length > 1 && (
+          {candidatesData?.candidates && candidatesData.candidates.length > 0 && (
             <div className="panel candidates-ranked-card">
               <div className="section-title">
                 <span className="icon-tile lilac">
@@ -783,22 +716,12 @@ export function ScanView({
             </div>
           )}
 
-          {candidatesData && !candidatesData.found && candidatesData.note === "NO_MATCH" && !aiLoading && (
+          {aiResult && !aiResult.found && stage === "Complete" && (
             <div className="notice error" role="alert">
               <AlertCircle size={23} />
               <div>
-                <strong>No verified Indian medicine found for &quot;{text.slice(0, 40) || "captured strip"}&quot;</strong>
+                <strong>No medicine match found for &quot;{text.slice(0, 40) || "captured strip"}&quot;</strong>
                 <p>The text could not be verified against pharmaceutical databases. Check that the medicine name and strength are clearly visible or consult your pharmacist.</p>
-              </div>
-            </div>
-          )}
-
-          {uncertain && !aiLoading && !aiMedicine && (!candidatesData || candidatesData.found) && (
-            <div className="notice warning" role="alert">
-              <AlertCircle size={23} />
-              <div>
-                <strong>Low confidence on strip text. Please confirm with your pharmacist.</strong>
-                <p>You can also search the reference list by the name printed on your strip.</p>
               </div>
             </div>
           )}
@@ -825,7 +748,7 @@ export function ScanView({
               <details>
                 <summary>View OCR raw details</summary>
                 <p>Sharpness (Laplacian variance): {previews.variance.toFixed(1)}.</p>
-                <pre>{text || "No text read yet."}</pre>
+                <pre>{rawOcrText || "No text read yet."}</pre>
               </details>
             </div>
           )}

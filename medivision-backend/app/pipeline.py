@@ -158,6 +158,22 @@ def identify(ocr_text: str) -> dict:
                     official_url = b_details["url"]
                 basis = "brand-hint"
 
+    # Keep explicit package observations separate from catalog proposals.
+    proposed_identity = {
+        "brand": brand_candidate, "salt": salt, "strength": strength, "form": form,
+    }
+    observed_identity = {
+        "strength": detected_strength if str_m else None,
+        "form": detected_form if form_m else None,
+    }
+    conflicts = []
+    for field, observed in observed_identity.items():
+        proposed = proposed_identity[field]
+        if observed and proposed and observed.casefold() != proposed.casefold():
+            conflicts.append({"field": field, "observed": observed, "proposed": proposed})
+    strength = observed_identity["strength"] or strength
+    form = observed_identity["form"] or form
+
     # Priority 3: Online retrieval grounding
     # Search for full brand and strength, never isolated chemical suffixes like "Hydrochloride" alone
     search_query = None
@@ -180,17 +196,7 @@ def identify(ocr_text: str) -> dict:
         hits = retriever.web_search(search_query, n=6)
         if hits and _relevance_ok(text, hits, require_medical=True):
             web_evidence = [{"title": h["title"], "url": h["url"], "snippet": h["snippet"]} for h in hits[:5]]
-            extracted = retriever.extract_medicine_details_from_evidence(search_query, hits)
-            if not salt and extracted.get("salt") and not is_insufficient_salt(extracted["salt"]):
-                salt = extracted["salt"].title()
-                canonical_salt = salt
-                basis = "online-search-grounding"
-            if not strength and extracted.get("strength"):
-                strength = extracted["strength"]
-            if extracted.get("form"):
-                form = extracted["form"]
-            if not manufacturer and extracted.get("manufacturer"):
-                manufacturer = extracted["manufacturer"]
+            # Search snippets are discovery references, never product identity proof.
 
     # Priority 4: Strict patient-safety gate:
     # Isolated chemical suffixes like "hydrochloride" are INSUFFICIENT to establish identity.
@@ -274,7 +280,7 @@ def identify(ocr_text: str) -> dict:
 
     # PMBJP generic pricing lookup (enforcing exact root, strength and dosage form)
     pmjp_pricing = None
-    if indian_pricing.available():
+    if indian_pricing.available() and not conflicts:
         pmjp_pricing = indian_pricing.lookup_generic_price(canonical_salt, strength, form)
         if pmjp_pricing:
             sources.append({
@@ -330,12 +336,28 @@ def identify(ocr_text: str) -> dict:
             "caveats": ["Evidence synthesized from verified medicine monographs and manufacturer data."],
         }
 
-    # Verification status: ONLY verified-online if actual corroborating evidence was found
-    has_verified_evidence = bool(official_url or rxnorm_id or label or (web_evidence and len(web_evidence) > 0))
-    verification_status = "verified-online" if has_verified_evidence else "candidate-needs-confirmation"
+    identity_evidence = retriever.corroborate_product(
+        brand_candidate, salt, strength, form
+    ) if not conflicts else []
+    for evidence in identity_evidence:
+        sources.append({
+            "title": "openFDA NDC product identity",
+            "url": evidence["url"],
+            "sourceType": evidence["sourceType"],
+        })
+    has_verified_evidence = bool(identity_evidence)
+    verification_status = (
+        "conflicting-identification" if conflicts else
+        "verified-online" if has_verified_evidence else "candidate-needs-confirmation"
+    )
 
     return {
         "found": True,
+        "proposedIdentity": proposed_identity,
+        "observedIdentity": observed_identity,
+        "conflicts": conflicts,
+        "requiresManualReview": bool(conflicts),
+        "identityEvidence": identity_evidence,
         "query": text[:400],
         "candidates": [canonical_salt],
         "salt": salt,
@@ -360,5 +382,5 @@ def identify(ocr_text: str) -> dict:
         "sources": sources,
         "webEvidence": web_evidence,
         "verificationStatus": verification_status,
-        "note": "OK" if has_verified_evidence else "NO_LABEL",
+        "note": "IDENTITY_CONFLICT" if conflicts else "OK" if has_verified_evidence else "NO_LABEL",
     }

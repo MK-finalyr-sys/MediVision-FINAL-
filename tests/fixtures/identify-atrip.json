@@ -1,0 +1,141 @@
+{
+  "found": true,
+  "proposedIdentity": {
+    "brand": "A-TRIP-10",
+    "salt": "Amitriptyline Hydrochloride",
+    "strength": "10 mg",
+    "form": "Tablet"
+  },
+  "observedIdentity": {
+    "strength": "10 mg",
+    "form": "Tablet"
+  },
+  "conflicts": [],
+  "requiresManualReview": false,
+  "identityEvidence": [],
+  "query": "nitine Hydrochloride Tablets I.P. 10 mg A-TRIP-10",
+  "candidates": [
+    "Amitriptyline"
+  ],
+  "salt": "Amitriptyline Hydrochloride",
+  "canonicalSalt": "Amitriptyline",
+  "brand": "A-TRIP-10",
+  "usName": "Amitriptyline",
+  "strength": "10 mg",
+  "form": "Tablet",
+  "rxnormId": "704",
+  "brandExamples": "A-TRIP-10",
+  "manufacturer": "Marc Cure",
+  "mappingBasis": "indian-brand-index",
+  "label": {
+    "uses": "INDICATIONS AND USAGE For the relief of symptoms of depression. Endogenous depression is more likely to be alleviated than are other depressive states.",
+    "warnings": "WARNINGS Clinical Worsening and Suicide Risk Patients with major depressive disorder (MDD), both adult and pediatric, may experience worsening of their depression and/or the emergence of suicidal ideation and behavior (suicidality) or unusual changes in behavior, whether or not they are taking antidepressant medication…",
+    "sideEffects": "ADVERSE REACTIONS Within each category the following adverse reactions are listed in order of decreasing severity. Included in the listing are a few adverse reactions which have not been reported with this specific drug."
+  },
+  "genericPricing": {
+    "salt": "Amitriptyline",
+    "brand": "Amitriptyline Hydrochloride Tablets IP 10mg",
+    "strength": "10's",
+    "mrp": "Rs. 6.19",
+    "unit": "10's",
+    "source": "PMBJP (Pradhan Mantri Bhartiya Janaushadhi Pariyojana)"
+  },
+  "card": {
+    "en": {
+      "uses": "INDICATIONS AND USAGE For the relief of symptoms of depression. Endogenous depression is more likely to be alleviated than are other depressive states.",
+      "beforeYouTake": [
+        "Check the expiry date and packaging before taking.",
+        "Tell your doctor if you have allergies, liver, or kidney problems.",
+        "Do not take with other medicines without asking your pharmacist."
+      ],
+      "sideEffects": "ADVERSE REACTIONS Within each category the following adverse reactions are listed in order of decreasing severity. Included in the listing are a few adverse reactions which have not been reported with this specific drug.",
+      "stopAndGetHelp": [
+        "Signs of severe allergy: facial swelling, rash, or breathing trouble.",
+        "Severe dizziness, fainting, or chest discomfort."
+      ]
+    },
+    "ta": {
+      "uses": "இந்த Amitriptyline மருந்து உங்கள் மருத்துவரின் பரிந்துரையின்படி பயன்படுத்தப்படுகிறது.",
+      "beforeYouTake": [
+        "மருந்தை எடுக்கும் முன் காலாவதி தேதியை சரிபார்க்கவும்.",
+        "ஒவ்வாமை அல்லது பிற நோய்கள் இருந்தால் மருத்துவரிடம் தெரிவிக்கவும்.",
+        "மருந்தாளுனரிடம் கேட்காமல் மற்ற மருந்துகளுடன் சேர்த்து எடுக்க வேண்டாம்."
+      ],
+      "sideEffects": "அசாதாரண பக்க விளைவுகள் ஏற்பட்டால் மருத்துவரிடம் ஆலோசனை பெறவும்.",
+      "stopAndGetHelp": [
+        "தீவிர ஒவ்வாமை: முக வீக்கம், அரிப்பு அல்லது மூச்சுத் திணறல்.",
+        "மயக்கம் அல்லது தீவிர உடல் அசௌகரியம் ஏற்பட்டால் உடனே மருத்துவ உதவி பெறவும்."
+      ]
+    },
+    "hi": {
+      "uses": "यह Amitriptyline दवा आपके डॉक्टर के परामर्श के अनुसार उपयोग की जाती है।",
+      "beforeYouTake": [
+        "दवा लेने से पहले समाप्ति तिथि (expiry date) अवश्य जांचें।",
+        "यदि एलर्जी या अन्य बीमारियां हैं तो डॉक्टर को बताएं।",
+        "बिना डॉक्टर या फार्मासिस्ट की सलाह के अन्य दवाओं के साथ न लें।"
+      ],
+      "sideEffects": "यदि कोई असामान्य दुष्प्रभाव दिखे तो तुरंत डॉक्टर से संपर्क करें।",
+      "stopAndGetHelp": [
+        "गंभीर एलर्जी के लक्षण: चेहरे पर सूजन, लाल चकत्ते या सांस लेने में परेशानी।",
+        "अत्यधिक चक्कर या सीने में तकलीफ होने पर आपातकालीन मदद लें।"
+      ]
+    },
+    "model": "grounded-evidence-fallback",
+    "caveats": [
+      "Evidence synthesized from verified medicine monographs and manufacturer data."
+    ]
+  },
+  "entities": [
+    {
+      "label": "BRAND",
+      "text": "nitine",
+      "start": 0,
+      "end": 6
+    },
+    {
+      "label": "SALT",
+      "text": "Hydrochloride",
+      "start": 7,
+      "end": 20
+    },
+    {
+      "label": "FORM",
+      "text": "Tablets",
+      "start": 21,
+      "end": 28
+    }
+  ],
+  "nerModel": "crf-trained (entity F1=0.9963)",
+  "sources": [
+    {
+      "title": "Marc Cure — Official Product Reference",
+      "url": "https://marccure.in/products/a-trip-10-amitriptyline-tablet",
+      "sourceType": "manufacturer"
+    },
+    {
+      "title": "RxNorm (U.S. NIH) — Amitriptyline [RxCUI: 704]",
+      "url": "https://rxnav.nlm.nih.gov/REST/rxcui.json?name=Amitriptyline",
+      "sourceType": "government"
+    },
+    {
+      "title": "openFDA Drug Label (U.S. FDA) — Amitriptyline",
+      "url": "https://api.fda.gov/drug/label.json?search=openfda.generic_name:\"Amitriptyline\"&limit=1",
+      "sourceType": "government"
+    },
+    {
+      "title": "DailyMed Patient Leaflet — Amitriptyline",
+      "url": "https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=00d11130-c9ae-4258-9746-9763bc5deb84",
+      "sourceType": "label"
+    },
+    {
+      "title": "PMBJP Jan Aushadhi — Amitriptyline Hydrochloride Tablets IP 10mg",
+      "url": "https://janaushadhi.gov.in/",
+      "sourceType": "government"
+    }
+  ],
+  "webEvidence": [],
+  "verificationStatus": "candidate-needs-confirmation",
+  "note": "NO_LABEL",
+  "available": true,
+  "engine": "backend-ner"
+}

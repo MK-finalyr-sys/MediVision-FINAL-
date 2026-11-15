@@ -9,11 +9,31 @@ const contentSchema = z.object({
   stopAndGetHelp: z.array(z.string()).min(2).max(4),
   preChecklist: z.array(z.string()).min(2).max(4),
 });
+export const identityFieldsSchema = z.object({
+  brand: z.string().nullable().optional(), salt: z.string().nullable().optional(),
+  strength: z.string().nullable().optional(), form: z.string().nullable().optional(),
+});
+export const identificationSchema = z.object({
+  verificationStatus: z.enum(["none", "candidate-needs-confirmation", "conflicting-identification", "verified-online"]),
+  identityEvidence: z.array(z.object({
+    url: z.string().url(), sourceType: z.string(), recordId: z.string(),
+    retrievedAt: z.string(), supportedFields: identityFieldsSchema, validation: z.string(),
+  })).default([]),
+  conflicts: z.array(z.object({ field: z.string(), observed: z.string(), proposed: z.string() })).default([]),
+  requiresManualReview: z.boolean().default(false),
+  proposedIdentity: identityFieldsSchema.optional(),
+  observedIdentity: identityFieldsSchema.optional(),
+});
+export function needsIdentityConfirmation(medicine: Medicine): boolean {
+  return (!!medicine.identification || /^(ai|cand)-/.test(medicine.id)) && !medicine.identityConfirmed;
+}
 export const medicineSchema = z.object({
   id: z.string(), name: z.string(), aliases: z.array(z.string()),
   activeIngredient: z.string(), activeIngredient2: z.string().nullable(),
   strength: z.string(), form: z.string(), category: z.string(), tags: z.array(z.string()),
   verified: z.literal(false),
+  identification: identificationSchema.optional(),
+  identityConfirmed: z.boolean().optional(),
   sources: z.array(z.object({ title: z.string(), url: z.string().url().startsWith("https://"), sourceType: z.enum(["label", "government", "medical-reference"]) })).min(1),
   en: contentSchema, ta: contentSchema, hi: contentSchema,
 });

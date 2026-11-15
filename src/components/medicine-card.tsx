@@ -19,7 +19,7 @@ import {
   Coins,
   MessageSquare,
 } from "lucide-react";
-import type { Medicine, Language } from "@/lib/contracts";
+import { needsIdentityConfirmation, type Medicine, type Language } from "@/lib/contracts";
 import { tipsForTags, confidenceTier } from "@/lib/engine";
 import { tips } from "@/lib/catalog";
 import { Modal, cleanTranslation } from "./ui";
@@ -57,6 +57,7 @@ interface MedicineCardProps {
   score?: number;
   saved: boolean;
   onSave: () => void;
+  onConfirmIdentity?: () => void;
   onClose: () => void;
   onLanguage: (l: Language) => void;
   onCheckSafety?: (m: Medicine) => void;
@@ -70,6 +71,7 @@ export function MedicineCard({
   score,
   saved,
   onSave,
+  onConfirmIdentity,
   onClose,
   onLanguage,
   onCheckSafety,
@@ -81,6 +83,10 @@ export function MedicineCard({
   const [paused, setPaused] = useState(false);
   const [speechError, setSpeechError] = useState("");
   const utterance = useRef<SpeechSynthesisUtterance | null>(null);
+
+  const needsConfirmation = needsIdentityConfirmation(medicine);
+  const conflict = !!medicine.identification?.requiresManualReview || !!medicine.identification?.conflicts.length || medicine.identification?.verificationStatus === "conflicting-identification";
+  const canUseIdentity = !needsConfirmation && !conflict;
 
   const locale = { en: "en-IN", ta: "ta-IN", hi: "hi-IN" }[language];
   const voice = voices.find(
@@ -178,8 +184,23 @@ export function MedicineCard({
         </div>
       </div>
 
+      {(medicine.identification || needsConfirmation) && (
+        <section className={conflict ? "notice error" : "notice warning"} aria-label="Medicine identity confirmation">
+          <div>
+            <strong>{conflict ? "Manual review required" : medicine.identityConfirmed ? "Package identity confirmed by you" : "Confirm proposed medicine"}</strong>
+            <p>{medicine.identification?.verificationStatus === "verified-online" ? "External product evidence is available. Compare every field with your package." : "Locally supported candidate. Online product verification is unavailable."}</p>
+            {medicine.identification?.conflicts.map(item => <p key={item.field}>{item.field}: package says {item.observed}; catalog proposes {item.proposed}.</p>)}
+            {conflict ? <p>Ask a pharmacist to review this conflict. Correct the package text and rescan before continuing.</p> : needsConfirmation && (
+              <button type="button" className="button primary" onClick={onConfirmIdentity}>
+                I confirm the name, ingredient, strength and form match my package
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Prominent Continue with AI Assistant Action */}
-      {onAskAI && (
+      {onAskAI && canUseIdentity && (
         <div className="continue-ai-hero-box">
           <button
             type="button"
@@ -197,7 +218,7 @@ export function MedicineCard({
 
       {/* AI Quick Actions Bar */}
       <div className="card-ai-actions-bar">
-        {onCheckSafety && (
+        {onCheckSafety && canUseIdentity && (
           <button
             type="button"
             className="ai-action-btn safety-btn"
@@ -210,7 +231,7 @@ export function MedicineCard({
           </button>
         )}
 
-        {onCheckPricing && (
+        {onCheckPricing && canUseIdentity && (
           <button
             type="button"
             className="ai-action-btn pricing-btn"
@@ -232,8 +253,8 @@ export function MedicineCard({
             <CheckCircle2 size={16} />
           )}
           {score === undefined
-            ? "Selected from reference catalog"
-            : `${confidenceTier(score) === "HIGH" ? "Strong text match" : "Confirmed possible match"} · ${Math.round(score * 100)}%`}
+            ? (medicine.identification ? "Proposed package identity" : "Selected from reference catalog")
+            : `${confidenceTier(score) === "HIGH" ? "Strong text match" : "Possible match"} · ${Math.round(score * 100)}%`}
         </span>
         <span>Reference content · not clinically verified</span>
       </div>
@@ -409,12 +430,12 @@ export function MedicineCard({
             type="button"
             className={`button ${saved ? "saved-button" : "secondary"}`}
             onClick={onSave}
-            disabled={saved}
+            disabled={saved || !canUseIdentity}
           >
             {saved ? <BookmarkCheck size={20} /> : <BookmarkPlus size={20} />}
             {saved ? "Saved in Cabinet" : "Save to Cabinet"}
           </button>
-          {onAskAI && (
+          {onAskAI && canUseIdentity && (
             <button
               type="button"
               className="button primary"

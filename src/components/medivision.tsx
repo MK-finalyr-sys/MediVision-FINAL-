@@ -25,6 +25,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import {
+  needsIdentityConfirmation,
   savedSchema,
   logsSchema,
   recentSchema,
@@ -35,7 +36,7 @@ import {
   type Language,
   type Slot,
 } from "@/lib/contracts";
-import { medicines, hydrateAIMedicines } from "@/lib/catalog";
+import { medicines, hydrateAIMedicines, registerAIMedicines, aiMedicines } from "@/lib/catalog";
 import { findDuplicates, localDate, rollingLogs } from "@/lib/engine";
 import { keys, loadState, persist } from "@/lib/storage";
 import { aiHealth, type HealthResult } from "@/lib/ai-backend";
@@ -319,6 +320,10 @@ export default function MediVision() {
   }
 
   function add(m: Medicine) {
+    if (needsIdentityConfirmation(m) || m.identification?.requiresManualReview || m.identification?.conflicts.length) {
+      open(m);
+      return;
+    }
     if (saved.some((s) => s.id === m.id)) {
       notify(`${m.name} is already in your cabinet.`);
       return;
@@ -337,9 +342,20 @@ export default function MediVision() {
     }
   }
 
+  function confirmIdentity() {
+    if (!selected || selected.medicine.identification?.requiresManualReview || selected.medicine.identification?.conflicts.length) return;
+    const medicine = { ...selected.medicine, identityConfirmed: true };
+    try {
+      registerAIMedicines([medicine]);
+      setSelected({ ...selected, medicine });
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not save this confirmation. Please retry.", true);
+    }
+  }
+
   function requestSave() {
     if (!selected) return;
-    const duplicates = findDuplicates(selected.medicine, saved, medicines);
+    const duplicates = findDuplicates(selected.medicine, saved, [...medicines, ...aiMedicines()]);
     if (duplicates.length) {
       setConfirmed(false);
       setPending(selected.medicine);
@@ -455,6 +471,10 @@ export default function MediVision() {
 
   // Cross-feature routing helpers
   function routeToSafety(med: Medicine | string) {
+    if (typeof med !== "string" && (needsIdentityConfirmation(med) || med.identification?.requiresManualReview || med.identification?.conflicts.length)) {
+      open(med);
+      return;
+    }
     const target =
       typeof med === "string"
         ? medicines.find((m) => m.name.toLowerCase() === med.toLowerCase()) || null
@@ -464,6 +484,10 @@ export default function MediVision() {
   }
 
   function routeToPricing(med: Medicine | string) {
+    if (typeof med !== "string" && (needsIdentityConfirmation(med) || med.identification?.requiresManualReview || med.identification?.conflicts.length)) {
+      open(med);
+      return;
+    }
     const target =
       typeof med === "string"
         ? medicines.find((m) => m.name.toLowerCase() === med.toLowerCase()) || null
@@ -473,6 +497,10 @@ export default function MediVision() {
   }
 
   function routeToChat(med: Medicine | string) {
+    if (typeof med !== "string" && (needsIdentityConfirmation(med) || med.identification?.requiresManualReview || med.identification?.conflicts.length)) {
+      open(med);
+      return;
+    }
     const target =
       typeof med === "string"
         ? medicines.find((m) => m.name.toLowerCase() === med.toLowerCase()) || null
@@ -487,7 +515,7 @@ export default function MediVision() {
       ? "Privacy & data"
       : nav.find((n) => n.id === view)?.label || "Overview";
 
-  const duplicates = pending ? findDuplicates(pending, saved, medicines) : [];
+  const duplicates = pending ? findDuplicates(pending, saved, [...medicines, ...aiMedicines()]) : [];
 
   return (
     <div className="app-shell">
@@ -835,6 +863,7 @@ export default function MediVision() {
           score={selected.score}
           saved={saved.some((s) => s.id === selected.medicine.id)}
           onSave={requestSave}
+          onConfirmIdentity={confirmIdentity}
           onClose={() => setSelected(null)}
           onLanguage={changeLanguage}
           onCheckSafety={routeToSafety}
