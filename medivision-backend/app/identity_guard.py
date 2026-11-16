@@ -80,15 +80,14 @@ def visible_ingredients(ocr_text: str) -> list[str]:
     if not visible.strip():
         return []
     results: list[tuple[int, int, str]] = []
-    for first in set(visible.split()):
+    for first in sorted(set(visible.split())):
         for key, name in _ingredient_index().get(first, ()):
             needle = " " + key + " "
             start = visible.find(needle)
             if start < 0:
                 continue
             end = start + len(needle)
-            if not any(start < old_end and end > old_start for old_start, old_end, _ in results):
-                results.append((start, end, name))
+            results.append((start, end, name))
     # Prefer longer overlaps in all cases, independent of hash iteration order.
     results.sort(key=lambda x: (-(x[1] - x[0]), x[0]))
     accepted: list[tuple[int, int, str]] = []
