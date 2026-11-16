@@ -1,0 +1,33 @@
+name: Live backend diagnosis (public demo inputs)
+on:
+  push:
+    branches: [fix/ocr-image-safety-2026-11-16]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check public health and medicine identity (no secret or photo)
+        env:
+          URL: https://medivision-final.onrender.com
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          u = os.environ["URL"]
+          for label, method, path, data in [
+              ("health", "GET", "/health", None),
+              ("broken-ocr", "POST", "/identify", {"ocrText":"5mg Asp in\ncorey"}),
+              ("clear-ocr", "POST", "/identify", {"ocrText":"Asprole 75 Aspirin Tablets IP 75 mg"}),
+          ]:
+              try:
+                  req = urllib.request.Request(u+path, data=json.dumps(data).encode() if data else None, headers={"Content-Type":"application/json"}, method=method)
+                  with urllib.request.urlopen(req,timeout=90) as response:
+                      obj=json.load(response)
+                  fields = ("gemini","geminiStatus","geminiMessage","found","brand","salt","strength","form","mappingBasis","verificationStatus","note","visionAssisted")
+                  print(label,json.dumps({k:obj.get(k) for k in fields if k in obj},ensure_ascii=False))
+              except Exception as e:
+                  print(label,type(e).__name__,str(e)[:150])
+          PY
