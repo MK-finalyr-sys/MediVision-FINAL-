@@ -51,6 +51,9 @@ def ingredient_roots(composition: str | None) -> frozenset[str]:
 def _ingredient_index() -> dict[str, tuple[tuple[str, str], ...]]:
     """Index distinct full generic names by their first token (not 323k regexes)."""
     names: set[str] = set(LEXICON)
+    # Preserve the canonical capitalization of curated generic names. The
+    # large brand index commonly stores identical ingredient names lowercased.
+    canonical_names = {_clean(name): name for name in LEXICON}
     # The index is optional on Render; no dependency on downloaded files.
     try:
         from .integrations import brand_salt_lookup
@@ -70,7 +73,7 @@ def _ingredient_index() -> dict[str, tuple[tuple[str, str], ...]]:
                 continue
             if is_insufficient_salt(item):
                 continue
-            index[key.split()[0]].add((key, item))
+            index[key.split()[0]].add((key, canonical_names.get(key, item)))
     return {word: tuple(sorted(items, key=lambda x: -len(x[0]))) for word, items in index.items()}
 
 
