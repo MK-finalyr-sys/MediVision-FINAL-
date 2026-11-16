@@ -762,14 +762,20 @@ export function ScanView({
               <Search size={23} />
             </span>
             <h2>Know the name already?</h2>
-            <p>Find it in our 40-medicine reference catalog.</p>
+            <p>Search Indian medicine names and ingredients online, or browse the quick reference catalog.</p>
             <label className="search-field">
               <Search size={20} />
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search name or ingredient"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && query.trim() && !aiLoading) {
+                    e.preventDefault();
+                    void triggerAIPipeline(query.trim(), undefined, false);
+                  }
+                }}
+                placeholder="Enter brand, generic name or strength"
                 aria-label="Search medicines"
               />
               {query && (
@@ -786,6 +792,15 @@ export function ScanView({
                 </button>
               )}
             </label>
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => void triggerAIPipeline(query.trim(), undefined, false)}
+              disabled={!query.trim() || aiLoading}
+              aria-label="Search medicine online and identify"
+            >
+              <Search size={18} /> {aiLoading ? "Searching medicine…" : "Search online & identify"}
+            </button>
             <div className="search-results">
               {results.slice(0, query || browse ? 40 : 4).map((m) => (
                 <button
@@ -807,8 +822,8 @@ export function ScanView({
               {!results.length && (
                 <div className="empty-search">
                   <Search size={25} />
-                  <p>Not found in the 40-medicine catalog.</p>
-                  <small>Try scanning the strip or searching the salt name above.</small>
+                  <p>Not in the quick reference catalog.</p>
+                  <small>Use Search online & identify to check the connected medicine sources.</small>
                 </div>
               )}
             </div>
