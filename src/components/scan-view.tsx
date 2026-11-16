@@ -151,7 +151,7 @@ export function ScanView({
     try {
       if (!ocrText.trim()) throw new IdentificationError("parse", "No package text was read. Retake the photo or enter the printed text.");
       const [identityResponse, candidateResponse] = await Promise.allSettled([
-        aiIdentify(ocrText), aiCandidates(ocrText, imageB64, 5),
+        aiIdentify(ocrText, imageB64), aiCandidates(ocrText, imageB64, 5),
       ]);
       if (current !== run.current) return;
       if (identityResponse.status === "rejected") throw identityResponse.reason;
@@ -191,17 +191,13 @@ export function ScanView({
     stopCamera();
 
     try {
-      const b64Str = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("The photo could not be read."));
-        reader.readAsDataURL(file);
-      });
-
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       setStage("Enhancing");
       const processed = await preprocessImage(file);
       if (current !== run.current) return;
+      // Use a resized, compressed image instead of forwarding the original
+      // full-resolution photograph through Vercel's request-body limit.
+      const b64Str = processed.canvas.toDataURL("image/jpeg", 0.68);
       setPreviews(processed);
 
       if (processed.hash === lastHash.current) {
@@ -242,12 +238,26 @@ export function ScanView({
         preserve_interword_spaces: "1",
       });
 
-      const { data } = await worker.recognize(processed.canvas);
+      const firstReading = await worker.recognize(processed.canvas);
+      let recognizedText = firstReading.data.text;
+      let recognizedConfidence = firstReading.data.confidence;
+      // Sparse-text segmentation misses entire printed ingredient lines on
+      // some perfectly clear labels. Try AUTO before settling on a fragment.
+      if (recognizedText.trim().length < 70 || firstReading.data.confidence < 55) {
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+        const secondReading = await worker.recognize(processed.canvas);
+        const score = (value: string) =>
+          (value.match(/[A-Za-z]{4,}/g) || []).join("").length +
+          12 * (value.match(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml)\b/gi) || []).length;
+        if (score(secondReading.data.text) > score(recognizedText) + 5) {
+          recognizedText = secondReading.data.text;
+          recognizedConfidence = secondReading.data.confidence;
+        }
+      }
       await worker.terminate();
       workerRef.current = null;
 
       if (current !== run.current) return;
-      const recognizedText = data.text;
       setText(recognizedText);
       setRawOcrText(recognizedText);
       setStage("Matching");
@@ -256,7 +266,7 @@ export function ScanView({
         throw new Error("This looks like a placeholder image. Please take a new photo of your medicine strip.");
       }
 
-      if (matchMedicines(recognizedText, medicines, data.confidence).multiple) {
+      if (matchMedicines(recognizedText, medicines, recognizedConfidence).multiple) {
         throw new Error("More than one medicine may be visible. Please photograph one strip at a time.");
       }
       await triggerAIPipeline(recognizedText, b64Str, true);
@@ -755,7 +765,7 @@ export function ScanView({
 
           <div className="scan-privacy">
             <PrivacyLine />
-            <span>Images are processed locally and never stored on remote servers.</span>
+            <span>OCR runs on your device. The compressed photo may be sent to our backend and to Google for optional image reading when enabled; photos are not saved by MediVision.</span>
           </div>
         </section>
 
@@ -766,14 +776,20 @@ export function ScanView({
               <Search size={23} />
             </span>
             <h2>Know the name already?</h2>
-            <p>Find it in our 40-medicine reference catalog.</p>
+            <p>Search Indian medicine names and ingredients online, or browse the quick reference catalog.</p>
             <label className="search-field">
               <Search size={20} />
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search name or ingredient"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && query.trim() && !aiLoading) {
+                    e.preventDefault();
+                    void triggerAIPipeline(query.trim(), undefined, false);
+                  }
+                }}
+                placeholder="Enter brand, generic name or strength"
                 aria-label="Search medicines"
               />
               {query && (
@@ -790,6 +806,15 @@ export function ScanView({
                 </button>
               )}
             </label>
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => void triggerAIPipeline(query.trim(), undefined, false)}
+              disabled={!query.trim() || aiLoading}
+              aria-label="Search medicine online and identify"
+            >
+              <Search size={18} /> {aiLoading ? "Searching medicine…" : "Search online & identify"}
+            </button>
             <div className="search-results">
               {results.slice(0, query || browse ? 40 : 4).map((m) => (
                 <button
@@ -811,8 +836,8 @@ export function ScanView({
               {!results.length && (
                 <div className="empty-search">
                   <Search size={25} />
-                  <p>Not found in the 40-medicine catalog.</p>
-                  <small>Try scanning the strip or searching the salt name above.</small>
+                  <p>Not in the quick reference catalog.</p>
+                  <small>Use Search online & identify to check the connected medicine sources.</small>
                 </div>
               )}
             </div>

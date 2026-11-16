@@ -4,7 +4,11 @@ export const dynamic = "force-dynamic";
 const BACKEND_URL = (process.env.BACKEND_URL ?? "http://localhost:8000").replace(/\/+$/, "");
 const PROXY_TIMEOUT_MS = 120000;
 
-const bodySchema = z.object({ ocrText: z.string().optional(), text: z.string().optional() });
+const bodySchema = z.object({
+  ocrText: z.string().optional(),
+  text: z.string().optional(),
+  imageB64: z.string().max(3_000_000).optional(),
+});
 
 export async function POST(request: Request) {
   let body: z.infer<typeof bodySchema>;
@@ -18,7 +22,7 @@ export async function POST(request: Request) {
     const res = await fetch(`${BACKEND_URL}/identify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ocrText }),
+      body: JSON.stringify({ ocrText, imageB64: body.imageB64 }),
       signal: controller.signal,
     });
     if (!res.ok) {

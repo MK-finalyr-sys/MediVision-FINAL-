@@ -20,6 +20,8 @@ from urllib.parse import quote
 from . import retriever
 from .data import SALT_TO_US
 from .model_ner import predict_entities, is_insufficient_salt
+from .identity_guard import ingredient_roots, visible_ingredients
+from .search_candidate import discover as discover_search_candidate
 from .integrations import brand_salt_lookup, indian_pricing, ddinter
 
 SALT_TOKEN = re.compile(r"[a-z]{5,}")  # for the web-search relevance gate
@@ -158,6 +160,45 @@ def identify(ocr_text: str) -> dict:
                     official_url = b_details["url"]
                 basis = "brand-hint"
 
+    # Full printed ingredient names take priority over an unsupported CRF guess.
+    # This is not fuzzy reconstruction: exact ingredient text must be visible.
+    observed_ingredients = visible_ingredients(text)
+    observed_roots = frozenset().union(
+        *(ingredient_roots(name) for name in observed_ingredients)
+    )
+    mapped_roots = ingredient_roots(salt)
+    if observed_roots and observed_roots != mapped_roots:
+        if len(observed_roots) == 1 and len(observed_ingredients) == 1:
+            # The catalog/NER mapped to a DIFFERENT medicine despite legible
+            # ingredient text. Show the printed generic as a candidate instead;
+            # never retain an unrelated brand, manufacturer or reference URL.
+            salt = observed_ingredients[0]
+            canonical_salt = observed_ingredients[0]
+            brand_candidate = None
+            manufacturer = None
+            official_url = None
+            basis = "explicit-ingredient-in-ocr"
+        else:
+            # Multiple clearly printed ingredients cannot safely be reduced to
+            # one guessed salt. Ask for review instead of suggesting the wrong
+            # product or inventing an incomplete combination formulation.
+            return {
+                "found": False, "query": text[:400], "candidates": [],
+                "salt": None, "brand": None, "strength": detected_strength,
+                "form": detected_form if form_m else None,
+                "observedIngredients": observed_ingredients,
+                "mappingBasis": "multiple-ingredient-conflict",
+                "entities": entities, "nerModel": ner["model"],
+                "sources": [], "webEvidence": [],
+                "note": "MULTIPLE_INGREDIENTS_REQUIRE_REVIEW",
+                "verificationStatus": "none",
+            }
+    elif basis == "salt-in-text" and not observed_roots:
+        # The CRF model's fuzzy salt guess alone is not package evidence.
+        # The /candidates endpoint remains available for partial OCR recovery.
+        salt = None
+        canonical_salt = None
+
     # Keep explicit package observations separate from catalog proposals.
     proposed_identity = {
         "brand": brand_candidate, "salt": salt, "strength": strength, "form": form,
@@ -197,6 +238,23 @@ def identify(ocr_text: str) -> dict:
         if hits and _relevance_ok(text, hits, require_medical=True):
             web_evidence = [{"title": h["title"], "url": h["url"], "snippet": h["snippet"]} for h in hits[:5]]
             # Search snippets are discovery references, never product identity proof.
+
+    # If the local brand/NER path has no safe answer, use a single coherent
+    # search result to propose an UNVERIFIED candidate; do not synthesize
+    # ingredient/strength across different snippets or mark as verified.
+    if not salt and web_evidence:
+        found_online = discover_search_candidate(text, web_evidence)
+        if found_online:
+            salt = found_online["salt"]
+            canonical_salt = salt
+            brand_candidate = found_online["brand"]
+            strength = found_online.get("strength") or detected_strength
+            form = detected_form
+            basis = "online-search-candidate"
+            proposed_identity = {
+                "brand": brand_candidate, "salt": salt,
+                "strength": strength, "form": form,
+            }
 
     # Priority 4: Strict patient-safety gate:
     # Isolated chemical suffixes like "hydrochloride" are INSUFFICIENT to establish identity.
@@ -333,7 +391,7 @@ def identify(ocr_text: str) -> dict:
                 ],
             },
             "model": "grounded-evidence-fallback",
-            "caveats": ["Evidence synthesized from verified medicine monographs and manufacturer data."],
+            "caveats": ["General guidance only; verify product identity and medical details with a pharmacist. Unverified sources must not be treated as manufacturer-confirmed."],
         }
 
     identity_evidence = retriever.corroborate_product(
@@ -362,13 +420,13 @@ def identify(ocr_text: str) -> dict:
         "candidates": [canonical_salt],
         "salt": salt,
         "canonicalSalt": canonical_salt,
-        "brand": brand_candidate or (label or {}).get("brandExamples") or text[:30],
+        "brand": brand_candidate or (label or {}).get("brandExamples") or salt,
         "usName": us_name,
         "strength": strength or "as printed on packet",
         "form": form,
         "rxnormId": rxnorm_id,
         "brandExamples": brand_candidate or (label or {}).get("brandExamples"),
-        "manufacturer": manufacturer or ("Marc Cure" if "A-TRIP" in (brand_candidate or "").upper() else "Pharmaceutical Manufacturer"),
+        "manufacturer": manufacturer,
         "mappingBasis": basis,
         "label": {
             "uses": evidence_dict.get("uses") or "",
