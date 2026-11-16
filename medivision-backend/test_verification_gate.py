@@ -100,6 +100,11 @@ class VerificationTests(unittest.TestCase):
                 self.assertTrue(result["found"])
                 self.assertIn(salt, result["salt"])
                 self.assertEqual(result["strength"], strength)
+    def test_i_ddinter_only_when_database_installed(self):
+        # SQLite is a separately provisioned licensed dataset, intentionally
+        # not committed to GitHub. Do not fake or assume interactions in CI.
+        if not ddinter.available():
+            self.skipTest("DDInter database not provisioned in this runner")
         self.assertIsNotNone(ddinter.check_pair("aspirin", "warfarin"))
 
 
