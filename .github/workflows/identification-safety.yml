@@ -1,0 +1,44 @@
+name: Safe medicine identification regression tests
+
+on:
+  push:
+    branches:
+      - fix/safe-generic-ocr-identification-2026-11-16
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out proposed changes
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install backend dependencies
+        working-directory: medivision-backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Compile Python source
+        working-directory: medivision-backend
+        run: python -m compileall -q app test_visible_ingredient_guard.py test_verification_gate.py
+      - name: Exact ingredient and conflict regression suite
+        working-directory: medivision-backend
+        env:
+          PYTHON_DOTENV_DISABLED: '1'
+          GEMINI_API_KEY: ''
+          GOOGLE_API_KEY: ''
+        run: python -m unittest test_visible_ingredient_guard -v
+      - name: Original verification safety suite
+        working-directory: medivision-backend
+        env:
+          PYTHON_DOTENV_DISABLED: '1'
+          GEMINI_API_KEY: ''
+          GOOGLE_API_KEY: ''
+        run: python -m unittest test_verification_gate -v
