@@ -27,7 +27,7 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Compile Python source
         working-directory: medivision-backend
-        run: python -m compileall -q app test_visible_ingredient_guard.py test_verification_gate.py
+        run: python -m compileall -q app test_visible_ingredient_guard.py test_verification_gate.py test_vision_ocr.py
       - name: Exact ingredient and conflict regression suite
         working-directory: medivision-backend
         env:
@@ -42,3 +42,23 @@ jobs:
           GEMINI_API_KEY: ''
           GOOGLE_API_KEY: ''
         run: python -m unittest test_verification_gate -v
+      - name: Multimodal OCR rescue tests without network
+        working-directory: medivision-backend
+        env:
+          PYTHON_DOTENV_DISABLED: '1'
+          GEMINI_API_KEY: ''
+          GOOGLE_API_KEY: ''
+        run: python -m unittest test_vision_ocr -v
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
