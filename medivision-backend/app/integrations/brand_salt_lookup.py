@@ -187,6 +187,36 @@ def lookup_brand_details(brand: str) -> dict[str, Any] | None:
     return None
 
 
+def lookup_brand_details_exact(brand: str) -> dict[str, Any] | None:
+    """Exact Indian-brand evidence for OCR, without dangerous prefix fallback.
+
+    Free-text convenience lookups can shorten a phrase (e.g. "Brand 650 mg").
+    That is unacceptable for a scanner: the fragment "5mg Asp in" can be
+    interpreted as a different registered brand through an unrelated prefix.
+    The scanning pipeline already generates explicit one/2/3-token candidates.
+    """
+    if not brand:
+        return None
+    key = brand.strip().casefold()
+    normalized = key.replace("-", " ")
+    for candidate in (key, normalized):
+        if candidate in KNOWN_BRAND_METADATA:
+            item = dict(KNOWN_BRAND_METADATA[candidate])
+            if not is_insufficient_salt(item.get("canonicalSalt") or item.get("salt")):
+                return item
+        if candidate in BRAND_SYNONYMS:
+            salt = BRAND_SYNONYMS[candidate]
+            if not is_insufficient_salt(salt):
+                return {"brand": brand.strip(), "salt": salt.title(), "canonicalSalt": salt.title()}
+    if not _ensure_loaded():
+        return None
+    for candidate in (key, normalized):
+        salt = (_cache or {}).get(candidate)
+        if salt and not is_insufficient_salt(salt):
+            return {"brand": brand.strip(), "salt": salt.title(), "canonicalSalt": salt.title()}
+    return None
+
+
 def lookup_salt(brand: str) -> str | None:
     """Return the canonical salt for an Indian brand name, or None."""
     if not brand:

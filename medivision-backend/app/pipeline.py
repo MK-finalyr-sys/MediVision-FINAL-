@@ -20,7 +20,7 @@ from urllib.parse import quote
 from . import retriever
 from .data import SALT_TO_US
 from .model_ner import predict_entities, is_insufficient_salt
-from .identity_guard import ingredient_roots, visible_ingredients
+from .identity_guard import ingredient_roots, visible_ingredients, credible_brand_in_ocr
 from .search_candidate import discover as discover_search_candidate
 from .integrations import brand_salt_lookup, indian_pricing, ddinter
 
@@ -101,10 +101,12 @@ def identify(ocr_text: str) -> dict:
     web_evidence = []
     sources = []
 
+    observed_ingredients = visible_ingredients(text)
+
     # Priority 1: Check recognizable Indian product brands in OCR text FIRST
     # (Exact brand names e.g. A-TRIP-10, Dolo 650, Pan 40 take priority over raw CRF token tags)
     if brand_salt_lookup.available():
-        clean_text = re.sub(r"[^A-Za-z0-9\s\-]", " ", text)
+        clean_text = re.sub(r"[^A-Za-z0-9\s.\-]", " ", text)
         words = clean_text.split()
         candidate_phrases = []
         # Hyphenated tokens first (e.g. A-TRIP-10, PAN-D, GLYCOMET-GP)
@@ -120,8 +122,9 @@ def identify(ocr_text: str) -> dict:
             phrase_str = phrase.strip()
             if len(phrase_str) < 3 or is_insufficient_salt(phrase_str):
                 continue
-            details = brand_salt_lookup.lookup_brand_details(phrase_str)
-            if details and not is_insufficient_salt(details.get("canonicalSalt") or details.get("salt")):
+            details = brand_salt_lookup.lookup_brand_details_exact(phrase_str)
+            if (details and credible_brand_in_ocr(phrase_str, text, bool(observed_ingredients))
+                    and not is_insufficient_salt(details.get("canonicalSalt") or details.get("salt"))):
                 brand_candidate = details.get("brand") or phrase_str
                 salt = details.get("salt")
                 canonical_salt = details.get("canonicalSalt") or salt
@@ -145,7 +148,7 @@ def identify(ocr_text: str) -> dict:
             brand_candidate = ner.get("brand")
             basis = ner.get("mappingBasis", "salt-in-text")
         elif ner.get("brand") and not is_insufficient_salt(ner["brand"]):
-            b_details = brand_salt_lookup.lookup_brand_details(ner["brand"])
+            b_details = brand_salt_lookup.lookup_brand_details_exact(ner["brand"])
             if b_details and not is_insufficient_salt(b_details.get("canonicalSalt") or b_details.get("salt")):
                 brand_candidate = b_details.get("brand") or ner["brand"]
                 salt = b_details.get("salt")
@@ -162,7 +165,6 @@ def identify(ocr_text: str) -> dict:
 
     # Full printed ingredient names take priority over an unsupported CRF guess.
     # This is not fuzzy reconstruction: exact ingredient text must be visible.
-    observed_ingredients = visible_ingredients(text)
     observed_roots = frozenset().union(
         *(ingredient_roots(name) for name in observed_ingredients)
     )
@@ -193,11 +195,16 @@ def identify(ocr_text: str) -> dict:
                 "note": "MULTIPLE_INGREDIENTS_REQUIRE_REVIEW",
                 "verificationStatus": "none",
             }
-    elif basis == "salt-in-text" and not observed_roots:
-        # The CRF model's fuzzy salt guess alone is not package evidence.
-        # The /candidates endpoint remains available for partial OCR recovery.
+    elif basis in ("salt-in-text", "brand-hint") and not observed_roots:
+        # A model-predicted name or a lookup from an arbitrary NER fragment
+        # is NOT evidence of the actual medicine on the package.
+        # Keep the input available for review / online discovery instead.
         salt = None
         canonical_salt = None
+        brand_candidate = None
+        manufacturer = None
+        official_url = None
+        basis = "none"
 
     # Keep explicit package observations separate from catalog proposals.
     proposed_identity = {

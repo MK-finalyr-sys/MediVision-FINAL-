@@ -60,6 +60,19 @@ def discover(ocr_text: str, hits: list[dict]) -> dict | None:
         distinct = [t for t in matches if t.casefold() not in roots]
         if len(tokens) > 1 and not distinct:
             continue
+        if requested_strengths and distinct:
+            # A strength printed *before* an unrelated word is not an
+            # established brand/strength pair. E.g. OCR "5mg Asp in corey"
+            # must not become a confident medicine named "corey 5 mg".
+            brand_token = distinct[0]
+            product_strength = re.search(
+                rf"(?<![A-Za-z0-9]){re.escape(brand_token)}"
+                r"(?:\s*[- ]\s*|\s+)"
+                r"\d+(?:\.\d+)?\s*(?:mg|mcg|g|iu|ml)\b",
+                ocr_text, re.I,
+            )
+            if not product_strength:
+                continue
         results.append({
             "brand": distinct[0] if distinct else None,
             "salt": names[0],
