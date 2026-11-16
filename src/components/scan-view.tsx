@@ -240,6 +240,7 @@ export function ScanView({
 
       const firstReading = await worker.recognize(processed.canvas);
       let recognizedText = firstReading.data.text;
+      let recognizedConfidence = firstReading.data.confidence;
       // Sparse-text segmentation misses entire printed ingredient lines on
       // some perfectly clear labels. Try AUTO before settling on a fragment.
       if (recognizedText.trim().length < 70 || firstReading.data.confidence < 55) {
@@ -250,6 +251,7 @@ export function ScanView({
           12 * (value.match(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml)\b/gi) || []).length;
         if (score(secondReading.data.text) > score(recognizedText) + 5) {
           recognizedText = secondReading.data.text;
+          recognizedConfidence = secondReading.data.confidence;
         }
       }
       await worker.terminate();
@@ -264,7 +266,7 @@ export function ScanView({
         throw new Error("This looks like a placeholder image. Please take a new photo of your medicine strip.");
       }
 
-      if (matchMedicines(recognizedText, medicines, data.confidence).multiple) {
+      if (matchMedicines(recognizedText, medicines, recognizedConfidence).multiple) {
         throw new Error("More than one medicine may be visible. Please photograph one strip at a time.");
       }
       await triggerAIPipeline(recognizedText, b64Str, true);
