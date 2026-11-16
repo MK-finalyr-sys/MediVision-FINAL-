@@ -32,6 +32,38 @@ def _clean(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", (text or "").casefold()))
 
 
+
+_FORM_WORDS = {"tablet", "tablets", "capsule", "capsules", "injection", "syrup", "mg", "mcg", "ip", "usp", "pvt", "ltd", "manufactured"}
+
+
+def credible_brand_in_ocr(brand: str, ocr_text: str, has_full_ingredient: bool) -> bool:
+    """Avoid promoting random OCR fragments to a medicine identity.
+
+    On weak OCR without a *full* printed generic ingredient, the name and
+    strength must occur together in the same forward product phrase.
+    A trailing manufacturer's name after '5mg ...' is not a brand-strength
+    pair. This never upgrades a source to independent online verification.
+    """
+    brand = (brand or "").strip()
+    if not re.match(r"^[A-Za-z][A-Za-z0-9. -]{2,55}$", brand):
+        return False
+    words = brand.casefold().split()
+    if not words or any(word in _FORM_WORDS for word in words):
+        return False
+    # Don't treat ingredient/formulation words as the product's brand.
+    if len(words) > 3:
+        return False
+    if has_full_ingredient:
+        return True
+    # Brand number is printed immediately after the name, not before it.
+    normalized = re.sub(r"\s+", " ", ocr_text or "")
+    token = re.escape(brand).replace(r"\ ", r"\s+")
+    pattern = rf"(?<![A-Za-z0-9]){token}(?:\s*[- ]\s*|\s+)(?:\d{{1,4}}\b)"
+    return re.search(pattern, normalized, re.I) is not None or re.search(
+        rf"(?<![A-Za-z0-9]){token}(?![A-Za-z0-9])", normalized, re.I
+    ) is not None and bool(re.search(r"[- ]\d{1,4}$", brand))
+
+
 def ingredient_roots(composition: str | None) -> frozenset[str]:
     """Compare complete active-ingredient sets, not loose substring matches."""
     if not composition:
