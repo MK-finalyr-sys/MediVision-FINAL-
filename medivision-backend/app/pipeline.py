@@ -106,7 +106,7 @@ def identify(ocr_text: str) -> dict:
     # Priority 1: Check recognizable Indian product brands in OCR text FIRST
     # (Exact brand names e.g. A-TRIP-10, Dolo 650, Pan 40 take priority over raw CRF token tags)
     if brand_salt_lookup.available():
-        clean_text = re.sub(r"[^A-Za-z0-9\s\-]", " ", text)
+        clean_text = re.sub(r"[^A-Za-z0-9\s.\-]", " ", text)
         words = clean_text.split()
         candidate_phrases = []
         # Hyphenated tokens first (e.g. A-TRIP-10, PAN-D, GLYCOMET-GP)
