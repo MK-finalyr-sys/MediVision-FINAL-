@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/safe-generic-ocr-identification-2026-11-16
+      - fix/ocr-image-safety-2026-11-16
   workflow_dispatch:
 
 permissions:
@@ -27,7 +28,7 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Compile Python source
         working-directory: medivision-backend
-        run: python -m compileall -q app test_visible_ingredient_guard.py test_verification_gate.py test_vision_ocr.py test_online_search_candidate.py
+        run: python -m compileall -q app test_visible_ingredient_guard.py test_verification_gate.py test_vision_ocr.py test_online_search_candidate.py test_live_ocr_incident.py
       - name: Exact ingredient and conflict regression suite
         working-directory: medivision-backend
         env:
@@ -56,6 +57,13 @@ jobs:
           GEMINI_API_KEY: ''
           GOOGLE_API_KEY: ''
         run: python -m unittest test_online_search_candidate -v
+      - name: Real-world noisy Asprole OCR abstention regressions
+        working-directory: medivision-backend
+        env:
+          PYTHON_DOTENV_DISABLED: '1'
+          GEMINI_API_KEY: ''
+          GOOGLE_API_KEY: ''
+        run: python -m unittest test_live_ocr_incident -v
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
