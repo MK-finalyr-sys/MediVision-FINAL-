@@ -238,12 +238,24 @@ export function ScanView({
         preserve_interword_spaces: "1",
       });
 
-      const { data } = await worker.recognize(processed.canvas);
+      const firstReading = await worker.recognize(processed.canvas);
+      let recognizedText = firstReading.data.text;
+      // Sparse-text segmentation misses entire printed ingredient lines on
+      // some perfectly clear labels. Try AUTO before settling on a fragment.
+      if (recognizedText.trim().length < 70 || firstReading.data.confidence < 55) {
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+        const secondReading = await worker.recognize(processed.canvas);
+        const score = (value: string) =>
+          (value.match(/[A-Za-z]{4,}/g) || []).join("").length +
+          12 * (value.match(/\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml)\b/gi) || []).length;
+        if (score(secondReading.data.text) > score(recognizedText) + 5) {
+          recognizedText = secondReading.data.text;
+        }
+      }
       await worker.terminate();
       workerRef.current = null;
 
       if (current !== run.current) return;
-      const recognizedText = data.text;
       setText(recognizedText);
       setRawOcrText(recognizedText);
       setStage("Matching");
