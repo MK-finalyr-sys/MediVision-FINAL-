@@ -21,6 +21,7 @@ from . import retriever
 from .data import SALT_TO_US
 from .model_ner import predict_entities, is_insufficient_salt
 from .identity_guard import ingredient_roots, visible_ingredients
+from .search_candidate import discover as discover_search_candidate
 from .integrations import brand_salt_lookup, indian_pricing, ddinter
 
 SALT_TOKEN = re.compile(r"[a-z]{5,}")  # for the web-search relevance gate
@@ -237,6 +238,23 @@ def identify(ocr_text: str) -> dict:
         if hits and _relevance_ok(text, hits, require_medical=True):
             web_evidence = [{"title": h["title"], "url": h["url"], "snippet": h["snippet"]} for h in hits[:5]]
             # Search snippets are discovery references, never product identity proof.
+
+    # If the local brand/NER path has no safe answer, use a single coherent
+    # search result to propose an UNVERIFIED candidate; do not synthesize
+    # ingredient/strength across different snippets or mark as verified.
+    if not salt and web_evidence:
+        found_online = discover_search_candidate(text, web_evidence)
+        if found_online:
+            salt = found_online["salt"]
+            canonical_salt = salt
+            brand_candidate = found_online["brand"]
+            strength = found_online.get("strength") or detected_strength
+            form = detected_form
+            basis = "online-search-candidate"
+            proposed_identity = {
+                "brand": brand_candidate, "salt": salt,
+                "strength": strength, "form": form,
+            }
 
     # Priority 4: Strict patient-safety gate:
     # Isolated chemical suffixes like "hydrochloride" are INSUFFICIENT to establish identity.
