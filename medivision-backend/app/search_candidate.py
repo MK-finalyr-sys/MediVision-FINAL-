@@ -67,8 +67,8 @@ def discover(ocr_text: str, hits: list[dict]) -> dict | None:
             brand_token = distinct[0]
             product_strength = re.search(
                 rf"(?<![A-Za-z0-9]){re.escape(brand_token)}"
-                r"(?:\\s*[- ]\\s*|\\s+)"
-                r"\\d+(?:\\.\\d+)?\\s*(?:mg|mcg|g|iu|ml)\\b",
+                r"(?:\s*[- ]\s*|\s+)"
+                r"\d+(?:\.\d+)?\s*(?:mg|mcg|g|iu|ml)\b",
                 ocr_text, re.I,
             )
             if not product_strength:
