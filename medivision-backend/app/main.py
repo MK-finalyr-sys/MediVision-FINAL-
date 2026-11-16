@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from . import pipeline, retriever, candidates, safety, chatbot
+from . import pipeline, retriever, candidates, safety, chatbot, vision_ocr
 from .model_ner import predict_entities, status as ner_status
 from .integrations import status_map as integration_status_map, integration_summary
 from .integrations import pill_classifier, ddinter, openfda_interactions
@@ -124,7 +124,19 @@ def extract(body: ExtractIn):
 
 @app.post("/identify")
 def identify(body: IdentifyIn):
-    return pipeline.identify(body.ocrText)
+    # A photograph is optional. Keep browser OCR as the fallback when remote
+    # visual reading is unavailable, disabled, rate-limited, or ambiguous.
+    # Never identify from pill color/shape or turn model transcription into
+    # independent online proof.
+    visual_text = vision_ocr.read_printed_text(body.imageB64)
+    result = pipeline.identify(visual_text or body.ocrText)
+    if visual_text:
+        result["visionAssisted"] = True
+        result["visionPrintedText"] = visual_text[:500]
+        result["originalOcrText"] = body.ocrText[:500]
+    else:
+        result["visionAssisted"] = False
+    return result
 
 
 @app.post("/candidates")
