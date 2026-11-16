@@ -96,11 +96,15 @@ export function parseIdentification(data: unknown): AIBackendResult {
   return parsed.data;
 }
 
-export async function aiIdentify(ocrText: string, imageB64?: string, timeoutMs = 125000): Promise<AIBackendResult | null> {
+export async function aiIdentify(ocrText: string, imageOrTimeout?: string | number, timeoutMs = 125000): Promise<AIBackendResult | null> {
+  // Existing callers pass a numeric timeout as argument #2. Photo-based
+  // callers pass compressed image data in that position.
+  const imageB64 = typeof imageOrTimeout === "string" ? imageOrTimeout : undefined;
+  const actualTimeout = typeof imageOrTimeout === "number" ? imageOrTimeout : timeoutMs;
   const text = ocrText.trim();
   if (!text) return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), actualTimeout);
   try {
     const res = await fetch("/api/ai/identify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ocrText: text, imageB64 }), signal: controller.signal });
     if (!res.ok) throw await identificationResponseError(res);
