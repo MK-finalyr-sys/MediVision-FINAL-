@@ -151,7 +151,7 @@ export function ScanView({
     try {
       if (!ocrText.trim()) throw new IdentificationError("parse", "No package text was read. Retake the photo or enter the printed text.");
       const [identityResponse, candidateResponse] = await Promise.allSettled([
-        aiIdentify(ocrText), aiCandidates(ocrText, imageB64, 5),
+        aiIdentify(ocrText, imageB64), aiCandidates(ocrText, imageB64, 5),
       ]);
       if (current !== run.current) return;
       if (identityResponse.status === "rejected") throw identityResponse.reason;
@@ -191,17 +191,13 @@ export function ScanView({
     stopCamera();
 
     try {
-      const b64Str = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("The photo could not be read."));
-        reader.readAsDataURL(file);
-      });
-
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       setStage("Enhancing");
       const processed = await preprocessImage(file);
       if (current !== run.current) return;
+      // Use a resized, compressed image instead of forwarding the original
+      // full-resolution photograph through Vercel's request-body limit.
+      const b64Str = processed.canvas.toDataURL("image/jpeg", 0.68);
       setPreviews(processed);
 
       if (processed.hash === lastHash.current) {
@@ -755,7 +751,7 @@ export function ScanView({
 
           <div className="scan-privacy">
             <PrivacyLine />
-            <span>Images are processed locally and never stored on remote servers.</span>
+            <span>OCR runs on your device. The compressed photo may be sent to our backend and to Google for optional image reading when enabled; photos are not saved by MediVision.</span>
           </div>
         </section>
 
